@@ -110,8 +110,49 @@ arduino-cli config add board_manager.additional_urls \
   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 arduino-cli core update-index
 arduino-cli core install esp32:esp32
-arduino-cli lib install ArduinoJson
+arduino-cli lib install ArduinoJson "Adafruit SSD1306" "Adafruit GFX Library"
 ```
+
+---
+
+## Bibliotecas
+
+Tudo é instalado pelos comandos da seção acima — esta lista é só para referência.
+
+### App (`app/pubspec.yaml`, instaladas com `flutter pub get`)
+
+| Pacote | Para quê |
+| --- | --- |
+| `firebase_core`, `firebase_auth`, `cloud_firestore` | Firebase (login e banco em tempo real) |
+| `google_sign_in` | Login com Google |
+| `provider` | Estado (auth, casa, tema) |
+| `go_router` | Navegação |
+| `fl_chart` | Gráficos (histórico, consumo, sparkline) |
+| `qr_flutter` | QR codes do pareamento |
+| `flutter_blue_plus` | Bluetooth BLE (pareamento do ESP32) |
+| `permission_handler` | Permissões de Bluetooth/localização no Android |
+| `share_plus` | Compartilhar/exportar CSV |
+| `archive` | Geração de ZIP nas exportações |
+| `intl` | Formatação pt-BR (datas/números) |
+| `shared_preferences` | Preferências locais (tema) |
+| `cupertino_icons`, `flutter_localizations` | Ícones e traduções |
+
+Dev: `flutter_lints` (análise), `flutter_launcher_icons` (ícone),
+`flutter_native_splash` (splash screen).
+
+### Backend (`backend/package.json`, instaladas com `npm install`)
+
+| Pacote | Para quê |
+| --- | --- |
+| `firebase-admin` | Scripts de seed e exportação do Firestore |
+
+### Firmware (`firmware/hidromonitor`, instaladas com `arduino-cli lib install`)
+
+| Biblioteca | Para quê |
+| --- | --- |
+| `ArduinoJson` (7.4.3) | Serialização do JSON de telemetria/config |
+| `Adafruit SSD1306` + `Adafruit GFX Library` | Display OLED (via `Wire`, já incluída no core) |
+| Core `esp32:esp32` | Suporte ao ESP32-S3, Wi-Fi, BLE e HTTPS |
 
 ---
 
