@@ -63,14 +63,55 @@ configurar o sistema.
 
 ---
 
-## Requisitos
+## Instalação
 
-- [Flutter](https://docs.flutter.dev/get-started/install) (stable) + Android SDK
-- [Node.js](https://nodejs.org) 20+
-- [Firebase CLI](https://firebase.google.com/docs/cli) (`npm i -g firebase-tools`)
-- Seu próprio projeto Firebase (troque o ID em `.firebaserc` e gere a configuração
-  do app com `flutterfire configure`)
-- Para o firmware: `arduino-cli` (ou Arduino IDE) com suporte a ESP32-S3
+### 1. Pré-requisitos
+
+| Ferramenta | Versão | Instalação |
+| --- | --- | --- |
+| Git | qualquer | https://git-scm.com |
+| Flutter + Android SDK | stable | https://docs.flutter.dev/get-started/install |
+| Node.js | 20 ou superior | https://nodejs.org |
+| Firebase CLI | atual | `npm install -g firebase-tools` |
+| arduino-cli | atual (só para o firmware) | https://arduino.github.io/arduino-cli |
+
+Confira se está tudo no PATH:
+
+```bash
+git --version
+flutter doctor              # deve mostrar Android toolchain OK
+node -v && npm -v
+firebase --version
+arduino-cli version
+```
+
+### 2. Clonar e instalar dependências
+
+```bash
+git clone https://github.com/Adeniltonq/HidroMonitor.git
+cd HidroMonitor
+
+# App Flutter (baixa os pacotes do pubspec.yaml)
+cd app
+flutter pub get
+cd ..
+
+# Backend (firebase-admin, usado pelos scripts de seed/exportação)
+cd backend
+npm install
+cd ..
+```
+
+### 3. Firmware (só se for gravar o ESP32)
+
+```bash
+arduino-cli config init
+arduino-cli config add board_manager.additional_urls \
+  https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install esp32:esp32
+arduino-cli lib install ArduinoJson
+```
 
 ---
 
@@ -92,15 +133,20 @@ O app precisa apontar para **seu** projeto Firebase. Gere a configuração:
 
 ```bash
 cd app
+dart pub global activate flutterfire_cli   # só na primeira vez
 flutterfire configure --platforms=android --yes
 flutter pub get
 ```
 
 ### 3. Dados de demonstração (opcional)
 
+Precisa de uma chave de acesso administrativo ao Firebase: no Console, em
+*Project settings → Service accounts → Generate new private key*, baixe o JSON
+e aponte a variável `SEED_SERVICE_ACCOUNT` para ele (fora do repositório).
+
 ```bash
 cd backend
-npm install
+export SEED_SERVICE_ACCOUNT=/caminho/para/credencial.json
 npm run seed
 ```
 
@@ -133,6 +179,7 @@ Detalhes de pinagem, compilação e opções: [`firmware/README.md`](firmware/RE
 cd app
 flutter run                # emulador ou celular Android conectado
 ```
+
 ### Gerar o APK
 
 ```bash
