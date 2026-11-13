@@ -1,0 +1,535 @@
+rules_version = '2';
+
+// =============================================================================
+// HidroMonitor — Security Rules (Firestore)
+// Política: nega tudo por padrão; isolamento multi-inquilino por house/members.
+// O app é SOMENTE LEITURA de telemetria + configuração de parâmetros.
+// Nenhuma regra aqui permite ligar/desligar bomba ou válvula.
+// =============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------------
+    // Funções auxiliares
+    // ---------------------------------------------------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function houseRef(h) {
+      return /databases/$(database)/documents/houses/$(h);
+    }
+
+    function memberRef(h, u) {
+      return /databases/$(database)/documents/houses/$(h)/members/$(u);
+    }
+
+    function inviteRef(h, code) {
+      return /databases/$(database)/documents/houses/$(h)/invites/$(code);
+    }
+
+    function deviceRef(h, d) {
+      return /databases/$(database)/documents/houses/$(h)/devices/$(d);
+    }
+
+    // Só enxerga a casa quem tem documento em members/{uid}.
+    function isMember(h) {
+      return signedIn() && exists(memberRef(h, uid()));
+    }
+
+    function myRole(h) {
+      return get(memberRef(h, uid())).data.role;
+    }
+
+    function isOwner(h) {
+      return isMember(h) && myRole(h) == 'owner';
+    }
+
+    function isAdmin(h) {
+      return isMember(h) && myRole(h) == 'admin';
+    }
+
+    function isManager(h) {
+      return isOwner(h) || isAdmin(h);
+    }
+
+    // ownerUid original da casa: nunca pode ser removido/rebaixado (protege o último owner).
+    function founderUid(h) {
+      return get(houseRef(h)).data.ownerUid;
+    }
+
+    function deviceData(h, d) {
+      return get(deviceRef(h, d)).data;
+    }
+
+    // Autenticação de dispositivo: o JWT do ESP32 tem uid == devices/{id}.deviceUid.
+    function isDeviceAuth(h, d) {
+      return signedIn() && deviceData(h, d).deviceUid == uid();
+    }
+
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function isNum(v) {
+      return v is int || v is float;
+    }
+
+    function inRange(v, min, max) {
+      return isNum(v) && v >= min && v <= max;
+    }
+
+    function isStr(v, maxSize) {
+      return v is string && v.size() <= maxSize;
+    }
+
+    function nonEmptyStr(v, maxSize) {
+      return v is string && v.size() > 0 && v.size() <= maxSize;
+    }
+
+    function isRole(v) {
+      return v is string && v in ['owner', 'admin', 'viewer'];
+    }
+
+    function isSeverity(v) {
+      return v is string && v in ['info', 'warn', 'crit'];
+    }
+
+    function isEventType(v) {
+      return v is string && v in [
+        'pump_on', 'pump_off', 'valve_open', 'valve_close',
+        'boot', 'wifi_drop', 'wifi_conn', 'invalid_reading',
+        'manual_on', 'manual_off', 'manual_auto'
+      ];
+    }
+
+    // ---------------------------------------------------------------------
+    // Validação de configuração da caixa (parâmetros apenas — nunca atuação)
+    // ---------------------------------------------------------------------
+    function validTank(t) {
+      return t is map
+        && t.keys().hasAll([
+          'format', 'heightCm', 'capacityL', 'sensorOffsetCm', 'minRangeCm', 'maxRangeCm'
+        ])
+        && t.format is string
+        && t.format in ['cilindro', 'retangular', 'livre']
+        && inRange(t.heightCm, 1, 2000)
+        && inRange(t.capacityL, 0.1, 1000000)
+        && inRange(t.sensorOffsetCm, 0, 2000)
+        && inRange(t.minRangeCm, 0, 500)
+        && inRange(t.maxRangeCm, 1, 2000)
+        && t.maxRangeCm > t.minRangeCm
+        // geometria obrigatória conforme o formato escolhido
+        && (t.format != 'cilindro' || inRange(t.get('diameterCm', 0), 1, 2000))
+        && (t.format != 'retangular'
+              || (inRange(t.get('lengthCm', 0), 1, 2000)
+                  && inRange(t.get('widthCm', 0), 1, 2000)))
+        // tabela manual de litros: lista vazia (linear) ou 2..101 pontos
+        && (!('calibration' in t)
+            || (t.calibration is list
+                && (t.calibration.size() == 0
+                    || (t.calibration.size() >= 2
+                        && t.calibration.size() <= 101))));
+    }
+
+    function validLimits(l, t) {
+      return l is map
+        && l.keys().hasAll(['ligaCm', 'desligaCm'])
+        // desligaCm é o limite inferior (bomba desliga) e vive na zona cega do sensor
+        && inRange(l.ligaCm, 0, 2000)
+        && inRange(l.desligaCm, 0, 2000)
+        && l.ligaCm > l.desligaCm
+        && l.desligaCm >= t.minRangeCm;
+    }
+
+    function validAlerts(a) {
+      return a is map
+        && a.keys().hasAll(['lowLevelPercent', 'offlineAfterSec', 'sensorFailAfterSec'])
+        && inRange(a.lowLevelPercent, 0, 100)
+        && a.lowLevelPercent is int
+        && inRange(a.offlineAfterSec, 30, 86400)
+        && inRange(a.sensorFailAfterSec, 30, 86400);
+    }
+
+    function validConfig(c) {
+      return c is map
+        && c.keys().hasAll([
+          'configVersion', 'reportIntervalSec', 'limits', 'tank', 'alerts',
+          'updatedAt', 'updatedBy'
+        ])
+        && c.configVersion is int
+        && c.configVersion >= 1
+        && c.reportIntervalSec is int
+        && c.reportIntervalSec >= 15
+        && c.reportIntervalSec <= 3600
+        // janela de medição (média das amostras): 5..60 s (default 20)
+        && (!('sensorWindowSec' in c)
+            || (c.sensorWindowSec is int
+                && c.sensorWindowSec >= 5
+                && c.sensorWindowSec <= 60))
+        && validTank(c.tank)
+        && validLimits(c.limits, c.tank)
+        && validAlerts(c.alerts)
+        && c.updatedAt is timestamp
+        && c.updatedBy == uid();
+    }
+
+    function validLatest(l) {
+      return l is map
+        && l.keys().hasAll([
+          'distanceCm', 'levelPercent', 'levelCm', 'volumeL',
+          'pumpOn', 'valveOpen', 'sensorOk', 'rssi', 'ts'
+        ])
+        && inRange(l.distanceCm, 0, 2000)
+        && inRange(l.levelPercent, 0, 100)
+        && inRange(l.levelCm, 0, 2000)
+        && inRange(l.volumeL, 0, 1000000)
+        && l.pumpOn is bool
+        && l.valveOpen is bool
+        && l.sensorOk is bool
+        && inRange(l.rssi, -150, 0)
+        && l.ts is timestamp;
+    }
+
+    // ---------------------------------------------------------------------
+    // users/{uid} — perfil; só o próprio usuário, e só o nome é editável
+    // ---------------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if signedIn() && uid() == userId;
+
+      allow create: if signedIn()
+        && uid() == userId
+        && request.resource.data.keys().hasAll(['name', 'email', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['name', 'email', 'createdAt'])
+        && nonEmptyStr(request.resource.data.name, 80)
+        && nonEmptyStr(request.resource.data.email, 160)
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if signedIn()
+        && uid() == userId
+        && changed().hasOnly(['name'])
+        && nonEmptyStr(request.resource.data.name, 80);
+
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // houses/{houseId}
+    // ---------------------------------------------------------------------
+    match /houses/{houseId} {
+      allow read: if isMember(houseId);
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['name', 'createdAt', 'ownerUid'])
+        && request.resource.data.keys().hasOnly(['name', 'createdAt', 'ownerUid'])
+        && nonEmptyStr(request.resource.data.name, 80)
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.createdAt == request.time
+        // criação só é aceita junto com members/{uid} role owner (batch)
+        && existsAfter(memberRef(houseId, uid()))
+        && getAfter(memberRef(houseId, uid())).data.role == 'owner';
+
+      // owner/admin podem renomear; ownerUid/createdAt são imutáveis
+      allow update: if isManager(houseId)
+        && changed().hasOnly(['name'])
+        && nonEmptyStr(request.resource.data.name, 80);
+
+      // Exclusão definitiva: somente o proprietário (o app apaga antes as
+      // subcoleções em cascata).
+      allow delete: if isOwner(houseId);
+    }
+
+    // ---------------------------------------------------------------------
+    // Listagem das casas do usuário via collectionGroup('members')
+    // (consulta usada pelo seletor de casas do app). Só permite ler o
+    // próprio vínculo, sem get()/exists() para a query ser válida.
+    // ---------------------------------------------------------------------
+    match /{path=**}/members/{memberId} {
+      allow read: if signedIn() && resource.data.uid == uid();
+    }
+
+    // ---------------------------------------------------------------------
+    // houses/{houseId}/members/{memberId}
+    // ---------------------------------------------------------------------
+    match /houses/{houseId}/members/{memberId} {
+      // Funções no escopo do match para enxergar memberId.
+      function validMemberDoc() {
+        return request.resource.data.keys().hasAll(['role', 'name', 'email', 'joinedAt', 'uid'])
+          && request.resource.data.uid == memberId
+          && isRole(request.resource.data.role)
+          && nonEmptyStr(request.resource.data.name, 80)
+          && nonEmptyStr(request.resource.data.email, 160)
+          && request.resource.data.joinedAt == request.time;
+      }
+
+      function validInviteJoin(h) {
+        return request.resource.data.get('inviteCode', '') is string
+          && request.resource.data.get('inviteCode', '').size() > 0
+          && exists(inviteRef(h, request.resource.data.get('inviteCode', '')))
+          && get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data.used == false
+          && get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data.expiresAt > request.time
+          && get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data.role
+               == request.resource.data.role
+          && (
+               !('emailOpcional' in get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data)
+               || get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data.emailOpcional == null
+               || get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data.emailOpcional == ''
+               || get(inviteRef(h, request.resource.data.get('inviteCode', ''))).data.emailOpcional
+                    == request.auth.token.email
+             );
+      }
+
+      allow read: if isMember(houseId);
+
+      allow create: if signedIn() && validMemberDoc() && (
+        // 1) fundador, no mesmo batch que cria a casa
+        (memberId == uid()
+          && request.resource.data.role == 'owner'
+          && getAfter(houseRef(houseId)).data.ownerUid == uid())
+        // 2) gestão direta: owner cria qualquer papel; admin só viewer
+        || (isManager(houseId)
+          && (isOwner(houseId) || request.resource.data.role == 'viewer'))
+        // 3) auto-ingresso por convite válido (código informado no próprio doc)
+        || (memberId == uid() && validInviteJoin(houseId))
+      );
+
+      allow update: if isMember(houseId)
+        && changed().hasOnly(['role', 'name', 'email'])
+        && nonEmptyStr(request.resource.data.name, 80)
+        && nonEmptyStr(request.resource.data.email, 160)
+        && isRole(request.resource.data.role)
+        && (
+          // owner gerencia todos, menos o fundador e menos se auto-rebaixar
+          (isOwner(houseId)
+            && memberId != founderUid(houseId)
+            && !(memberId == uid()
+                 && resource.data.role == 'owner'
+                 && request.resource.data.role != 'owner'))
+          // admin gerencia apenas viewers e não altera papel
+          || (isAdmin(houseId)
+            && resource.data.role == 'viewer'
+            && request.resource.data.role == 'viewer')
+        );
+
+      allow delete: if (isOwner(houseId) && memberId != founderUid(houseId))
+        || (isAdmin(houseId) && resource.data.role == 'viewer')
+        // limpeza final da exclusão da casa: o proprietário remove o próprio
+        // vínculo depois que o documento da casa já não existe
+        || (isOwner(houseId) && !exists(houseRef(houseId)));
+    }
+
+    // ---------------------------------------------------------------------
+    // houses/{houseId}/invites/{code}
+    // ---------------------------------------------------------------------
+    match /houses/{houseId}/invites/{code} {
+      // get exige conhecer o código exato; list só para gestores
+      allow get: if signedIn();
+      allow list: if isManager(houseId);
+
+      allow create: if isManager(houseId)
+        && request.resource.data.keys().hasAll([
+          'role', 'createdBy', 'createdAt', 'expiresAt', 'used'
+        ])
+        && isRole(request.resource.data.role)
+        // convite nunca concede 'owner'; admin só convida viewer
+        && (
+          (isOwner(houseId) && request.resource.data.role in ['admin', 'viewer'])
+          || (isAdmin(houseId) && request.resource.data.role == 'viewer')
+        )
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.used == false
+        && (!('emailOpcional' in request.resource.data)
+            || request.resource.data.emailOpcional == null
+            || isStr(request.resource.data.emailOpcional, 160));
+
+      // aceite: apenas marca used/usedBy, uma única vez, pelo próprio convidado
+      allow update: if signedIn()
+        && changed().hasOnly(['used', 'usedBy'])
+        && resource.data.used == false
+        && resource.data.expiresAt > request.time
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == uid()
+        && (
+          !('emailOpcional' in resource.data)
+          || resource.data.emailOpcional == null
+          || resource.data.emailOpcional == ''
+          || resource.data.emailOpcional == request.auth.token.email
+        );
+
+      allow delete: if isManager(houseId);
+    }
+
+    // ---------------------------------------------------------------------
+    // houses/{houseId}/devices/{deviceId}
+    // ---------------------------------------------------------------------
+    match /houses/{houseId}/devices/{deviceId} {
+      // membros leem tudo; o próprio dispositivo lê seu doc para buscar config
+      // (reportIntervalSec/configVersion) e para confirmar o provisioning.
+      allow read: if isMember(houseId) || isDeviceAuth(houseId, deviceId);
+
+      allow create: if isManager(houseId)
+        && request.resource.data.keys().hasAll([
+          'name', 'serial', 'deviceUid', 'fwVersion', 'createdAt', 'config'
+        ])
+        && nonEmptyStr(request.resource.data.name, 80)
+        && nonEmptyStr(request.resource.data.serial, 64)
+        && nonEmptyStr(request.resource.data.deviceUid, 128)
+        && isStr(request.resource.data.fwVersion, 40)
+        && request.resource.data.createdAt == request.time
+        && validConfig(request.resource.data.config)
+        && request.resource.data.config.configVersion == 1;
+
+      allow update: if (
+        // dispositivo: só telemetria de estado
+        (isDeviceAuth(houseId, deviceId)
+          && changed().hasOnly(['latest', 'lastSeen', 'fwVersion'])
+          && (!('latest' in request.resource.data) || validLatest(request.resource.data.latest))
+          && (!('lastSeen' in request.resource.data) || request.resource.data.lastSeen is timestamp)
+          && (!('fwVersion' in request.resource.data) || isStr(request.resource.data.fwVersion, 40)))
+        ||
+        // gestor: só configuração, sempre incrementando configVersion
+        (isManager(houseId)
+          && changed().hasOnly(['config'])
+          && request.resource.data.config.configVersion
+               == resource.data.config.configVersion + 1
+          && request.resource.data.config.updatedAt == request.time
+          && validConfig(request.resource.data.config))
+      );
+
+      allow delete: if isOwner(houseId);
+
+      // ---------------------------------------------------------------
+      // Telemetria: escrita exclusiva do dispositivo; update/delete proibidos.
+      // ---------------------------------------------------------------
+      match /readings/{readingId} {
+        allow read: if isMember(houseId);
+        allow create: if isDeviceAuth(houseId, deviceId)
+          && request.resource.data.keys().hasAll([
+            'distanceCm', 'levelPercent', 'levelCm', 'volumeL',
+            'pumpOn', 'valveOpen', 'sensorOk', 'rssi', 'ts'
+          ])
+          && inRange(request.resource.data.distanceCm, 0, 2000)
+          && inRange(request.resource.data.levelPercent, 0, 100)
+          && inRange(request.resource.data.levelCm, 0, 2000)
+          && inRange(request.resource.data.volumeL, 0, 1000000)
+          && request.resource.data.pumpOn is bool
+          && request.resource.data.valveOpen is bool
+          && request.resource.data.sensorOk is bool
+          && inRange(request.resource.data.rssi, -150, 0)
+          && request.resource.data.ts is timestamp;
+        // update nunca; delete só pelo proprietário (exclusão da casa/device)
+        allow update: if false;
+        allow delete: if isOwner(houseId);
+      }
+
+      match /events/{eventId} {
+        allow read: if isMember(houseId);
+        allow create: if isDeviceAuth(houseId, deviceId)
+          && request.resource.data.keys().hasAll(['type', 'detail', 'ts'])
+          && isEventType(request.resource.data.type)
+          && isStr(request.resource.data.detail, 500)
+          && request.resource.data.ts is timestamp;
+        allow update: if false;
+        allow delete: if isOwner(houseId);
+      }
+
+      // ---------------------------------------------------------------
+      // Comandos manuais (ligar/desligar/auto). O app apenas enfileira;
+      // quem executa é o firmware, com as travas de segurança locais.
+      // ---------------------------------------------------------------
+      match /commands/{commandId} {
+        allow read: if isMember(houseId) || isDeviceAuth(houseId, deviceId);
+
+        allow create: if isManager(houseId)
+          && request.resource.data.keys().hasAll([
+            'action', 'status', 'createdBy', 'createdByName',
+            'createdAt', 'expiresAt'
+          ])
+          && request.resource.data.action in ['pump_on', 'pump_off', 'auto']
+          && request.resource.data.status == 'pending'
+          && request.resource.data.createdBy == uid()
+          && nonEmptyStr(request.resource.data.createdByName, 80)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt > request.time;
+
+        // Só o device executa e marca o resultado.
+        allow update: if isDeviceAuth(houseId, deviceId)
+          && changed().hasOnly(['status', 'executedAt', 'detail'])
+          && request.resource.data.status in ['done', 'rejected']
+          && request.resource.data.executedAt is timestamp
+          && (!('detail' in request.resource.data)
+              || isStr(request.resource.data.detail, 300));
+
+        allow delete: if isManager(houseId);
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // houses/{houseId}/alerts/{alertId}
+    // ---------------------------------------------------------------------
+    match /houses/{houseId}/alerts/{alertId} {
+      allow read: if isMember(houseId);
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll([
+          'type', 'severity', 'message', 'deviceId', 'source', 'ts', 'ack'
+        ])
+        && nonEmptyStr(request.resource.data.type, 60)
+        && isSeverity(request.resource.data.severity)
+        && nonEmptyStr(request.resource.data.message, 500)
+        // O device envia ts do seu relógio (NTP); o app usa serverTimestamp.
+        && request.resource.data.ts is timestamp
+        && request.resource.data.ack == false
+        && (
+          // gerado pelo dispositivo autenticado, referenciando a si mesmo
+          (request.resource.data.source == 'device'
+            && nonEmptyStr(request.resource.data.deviceId, 128)
+            && isDeviceAuth(houseId, request.resource.data.deviceId))
+          // ou gerado pelo app em nome do usuário (ex.: alerta de configuração)
+          || (request.resource.data.source == 'app' && isMember(houseId))
+        );
+
+      // ack é o único update permitido, e só por membro
+      allow update: if isMember(houseId)
+        && changed().hasOnly(['ack', 'ackBy', 'ackTs'])
+        && resource.data.ack == false
+        && request.resource.data.ack == true
+        && request.resource.data.ackBy == uid()
+        && request.resource.data.ackTs == request.time;
+
+      allow delete: if isManager(houseId);
+    }
+
+    // ---------------------------------------------------------------------
+    // houses/{houseId}/configLog/{logId} — auditoria imutável
+    // ---------------------------------------------------------------------
+    match /houses/{houseId}/configLog/{logId} {
+      allow read: if isMember(houseId);
+
+      allow create: if isManager(houseId)
+        && request.resource.data.keys().hasAll(['ts', 'byUid', 'byName', 'changes'])
+        && request.resource.data.ts == request.time
+        && request.resource.data.byUid == uid()
+        && nonEmptyStr(request.resource.data.byName, 80)
+        && request.resource.data.changes is map
+        && request.resource.data.changes.size() > 0
+        && request.resource.data.changes.size() <= 50;
+
+      allow update: if false;
+      allow delete: if isOwner(houseId);
+    }
+
+    // Qualquer caminho não previsto acima permanece negado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

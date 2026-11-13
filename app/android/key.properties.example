@@ -1,0 +1,8 @@
+# Copie para android/key.properties (NÃO versionar) e ajuste os caminhos.
+# Gere a keystore com:
+#   keytool -genkey -v -keystore ~/hidromonitor-release.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias hidromonitor
+storePassword=SUA_SENHA_DA_KEYSTORE
+keyPassword=SUA_SENHA_DA_CHAVE
+keyAlias=hidromonitor
+storeFile=/home/SEU_USUARIO/hidromonitor-release.jks

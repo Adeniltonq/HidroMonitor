@@ -1,0 +1,14 @@
+{
+  "name": "hidromonitor-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rules, índices e seed demo do HidroMonitor",
+  "type": "commonjs",
+  "scripts": {
+    "seed": "node scripts/seed-demo.js",
+    "export": "node scripts/export-db.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.2"
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "project_info": {
+    "project_number": "399759536420",
+    "project_id": "monitor-de-caixa-d-agua",
+    "storage_bucket": "monitor-de-caixa-d-agua.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:399759536420:android:0c333756f929a8030fc3b1",
+        "android_client_info": {
+          "package_name": "br.app.hidromonitor"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "399759536420-edof7qmg5u71n28jllfs2uqihcmiqclr.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "br.app.hidromonitor",
+            "certificate_hash": "fbddb09b05276cd7a0570632c7549ccec8bae66a"
+          }
+        },
+        {
+          "client_id": "399759536420-q57td8idqmd74tn0pfsh6ce2ihftek10.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "br.app.hidromonitor",
+            "certificate_hash": "ce79772b8cf0e1b54a4b8ed11cbf2c33697bcad7"
+          }
+        },
+        {
+          "client_id": "399759536420-vltkab0obbhb5no6p3gl7h9ut5m8b2ci.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDs_0r49iwMOMz5VEE_6NKazmU3945BrtQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "399759536420-vltkab0obbhb5no6p3gl7h9ut5m8b2ci.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "399759536420-vh9q6r0r2nl2b9btkum0hk16ad66462l.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.monitorDeCaixaDAgua"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:399759536420:android:af037ec612703bfd0fc3b1",
+        "android_client_info": {
+          "package_name": "com.example.monitor_de_caixa_d_agua"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "399759536420-vltkab0obbhb5no6p3gl7h9ut5m8b2ci.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDs_0r49iwMOMz5VEE_6NKazmU3945BrtQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "399759536420-vltkab0obbhb5no6p3gl7h9ut5m8b2ci.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "399759536420-vh9q6r0r2nl2b9btkum0hk16ad66462l.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.monitorDeCaixaDAgua"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
